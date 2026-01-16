@@ -10,7 +10,7 @@ See external [documentation](https://mlir.llvm.org/docs/Dialects/EmitC/).
 import abc
 from collections.abc import Iterable, Mapping, Sequence
 from enum import IntEnum
-from typing import Generic, Literal
+from typing import Generic, Literal, Optional
 
 from typing_extensions import TypeVar, cast
 
@@ -57,11 +57,15 @@ from xdsl.irdl import (
     prop_def,
     region_def,
     result_def,
+    traits_def,
     var_operand_def,
     var_result_def,
 )
 from xdsl.parser import AttrParser
 from xdsl.printer import Printer
+from xdsl.traits import (
+    Pure
+)
 from xdsl.utils.exceptions import VerifyException
 from xdsl.utils.hints import isa
 
@@ -804,7 +808,7 @@ class EmitC_CmpPredicateValue(IntEnum):
     three_way = 6
 
     @classmethod
-    def has_value(cls, val) -> bool:
+    def has_value(cls, val: int) -> bool:
         return val in cls._value2member_map_
 
 @irdl_op_definition
@@ -853,20 +857,19 @@ class EmitC_CmpOp(EmitC_BinaryOperation):
 
     def __init__(
         self,
-        pred,
-        lhs,
-        rhs,
-        result_type
+        pred : int,
+        lhs : SSAValue,
+        rhs : SSAValue,
+        result_type : Attribute
     ):
         if not EmitC_CmpPredicateValue.has_value(pred):
             raise VerifyException(f"Got nonexistent predicate value: {pred}")
 
-        super.__init__(
-            lhs,
-            rhs,
-            result_type,
-            properties={pred}
-        )
+        '''super.__init__(
+            operands=[lhs, rhs],
+            result_types=[result_type],
+            properties={"predicate" : pred}
+        )'''
 
 
 @irdl_op_definition
@@ -969,9 +972,9 @@ class EmitC_ConstantOp(IRDLOperation):
     value = prop_def(EmitC_OpaqueOrTypedAttr)
     result = result_def(EmitCTypeConstr)
 
-    assembly_format = " attr-dict $value `:` type(results)"
+    #assembly_format = " attr-dict $value `:` type(results)"
 
-    irdl_options = (ParsePropInAttrDict(), )
+    #irdl_options = (ParsePropInAttrDict(), )
 
     def __init__(
         self,
@@ -1081,6 +1084,53 @@ class EmitC_DivOp(EmitC_BinaryOperation):
 
 
 @irdl_op_definition
+class EmitC_IncludeOp(IRDLOperation):
+    """
+    Include operation.
+
+    The `emitc.include` operation allows to define a source file inclusion via the
+    `#include` directive.
+
+    Example:
+
+    ```mlir
+    // Custom form defining the inclusion of `<myheader>`.
+    emitc.include <"myheader.h">
+
+    // Generic form of the same operation.
+    "emitc.include" (){include = "myheader.h", is_standard_include} : () -> ()
+
+    // Custom form defining the inclusion of `"myheader"`.
+    emitc.include "myheader.h"
+
+    // Generic form of the same operation.
+    "emitc.include" (){include = "myheader.h"} : () -> ()
+    ```
+    """
+
+    name = "emitc.include"
+    include = prop_def(StringAttr)
+    is_standard_include = opt_prop_def(UnitAttr)
+
+    irdl_options = (ParsePropInAttrDict(), )
+
+    assembly_format = "attr-dict ` `(`<` $is_standard_include^)? $include `>`"
+
+    def __init__(
+        self,
+        include : StringAttr,
+        is_standard_include : Optional[UnitAttr] = None
+    ):
+        super().__init__(
+            operands=[],
+            properties={
+                "include": include,
+                "is_standard_include" : is_standard_include
+            }
+        )
+
+
+@irdl_op_definition
 class EmitC_LiteralOp(IRDLOperation):
     """
     Literal operation.
@@ -1104,6 +1154,8 @@ class EmitC_LiteralOp(IRDLOperation):
 
     value = prop_def(StringAttr)
     result = result_def(EmitCTypeConstr)
+
+    traits = traits_def(Pure())
 
     assembly_format = "$value attr-dict `:` type($result)"
 
@@ -1498,8 +1550,8 @@ class EmitC_SubscriptOp(IRDLOperation):
 
         # array[i]
         if isinstance(val_type, EmitC_ArrayType):
-            if len(self.indices) != val_type.shape:
-                raise VerifyException(f"Array subscript expects {val_type.shape} indices, got {len(self.indices)}")
+            if len(self.indices) != len(val_type.shape):
+                raise VerifyException(f"Array subscript expects {len(val_type.shape)} indices, got {len(self.indices)}")
 
         # ptr[i]
         if isinstance(val_type, EmitC_PointerType):
@@ -1575,6 +1627,8 @@ class EmitC_VariableOp(IRDLOperation):
     value = prop_def(EmitC_OpaqueOrTypedAttr)
     result = result_def(EmitC_ArrayType | EmitC_LValueType)
 
+    #assembly_format = " attr-dict $value `:` type(results)"
+
     def __init__(
         self,
         value: EmitC_OpaqueOrTypedAttr,
@@ -1620,6 +1674,7 @@ EmitC = Dialect(
         EmitC_ConstantOp,
         EmitC_DereferenceOp,
         EmitC_DivOp,
+        EmitC_IncludeOp,
         EmitC_LiteralOp,
         EmitC_LoadOp,
         EmitC_LogicalAndOp,
