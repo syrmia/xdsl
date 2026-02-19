@@ -847,6 +847,39 @@ class EmitC_FieldOp(IRDLOperation):
 
     assembly_format = "$sym_name `:` custom<EmitCFieldOpTypeAndInitialValue>($type, $initial_value) attr-dict"
 
+    from xdsl.printer import Printer
+    from xdsl.parser import Parser
+
+    def print_EmitCFieldOpTypeAndInitialValue(
+            self,
+            printer: Printer,
+            type_attr: TypeAttribute,
+            initial_value: Attribute | None
+    ):
+        printer.print_attribute(type_attr)
+
+        if initial_value is not None:
+            printer.print_string(" = ")
+            printer.print_attribute(initial_value)
+
+
+    def parse_EmitCFieldOpTypeAndInitialValue(
+            self,
+            parser: Parser
+    ):
+        type_attr = parser.parse_type()
+        initial_value = None
+
+        has_equal = parser.parse_optional_punctuation("=")
+
+        if has_equal:
+            initial_value = parser.parse_attribute()
+            if not isinstance(initial_value, (IntegerAttr, FloatAttr, EmitC_OpaqueAttr)):
+                pass
+                # raise error
+        return type_attr
+
+
     def verify_(self) -> None:
         parentOp = self.parent_op()
         if not parentOp or not isinstance(parentOp, EmitC_ClassOp):
