@@ -817,6 +817,8 @@ class EmitC_ClassOp(IRDLOperation):
             return self.body.block
 
 
+#from xdsl.printer import Printer
+#from xdsl.parser import Parser
 @irdl_op_definition
 class EmitC_FieldOp(IRDLOperation):
     """
@@ -845,11 +847,10 @@ class EmitC_FieldOp(IRDLOperation):
     type = prop_def(TypeAttribute)
     initial_value = opt_prop_def(EmitC_OpaqueAttr | TypedAttribute)
 
-    assembly_format = "$sym_name `:` custom<EmitCFieldOpTypeAndInitialValue>($type, $initial_value) attr-dict"
+    assembly_format = "$sym_name `:` $type $initial_value attr-dict"
+    # assembly_format = "$sym_name `:` custom<EmitCFieldOpTypeAndInitialValue>($type, $initial_value) attr-dict"
 
-    from xdsl.printer import Printer
-    from xdsl.parser import Parser
-
+    """
     def print_EmitCFieldOpTypeAndInitialValue(
             self,
             printer: Printer,
@@ -861,7 +862,6 @@ class EmitC_FieldOp(IRDLOperation):
         if initial_value is not None:
             printer.print_string(" = ")
             printer.print_attribute(initial_value)
-
 
     def parse_EmitCFieldOpTypeAndInitialValue(
             self,
@@ -878,7 +878,7 @@ class EmitC_FieldOp(IRDLOperation):
                 pass
                 # raise error
         return type_attr
-
+    """
 
     def verify_(self) -> None:
         parentOp = self.parent_op()
