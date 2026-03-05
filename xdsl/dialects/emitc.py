@@ -29,6 +29,7 @@ from xdsl.dialects.builtin import (
     ShapedType,
     StaticShapeArrayConstr,
     StringAttr,
+    SymbolRefAttr,
     TensorType,
     TupleType,
     TypedAttribute,
@@ -800,7 +801,7 @@ class EmitC_ClassOp(IRDLOperation):
 
     assembly_format = "(`final` $final_specifier^)? $sym_name attr-dict-with-keyword $body"
 
-    sym_name = prop_def(StringAttr)
+    sym_name = prop_def(SymbolRefAttr)
     final_specifier = prop_def(UnitAttr)
 
     body = region_def()
@@ -811,6 +812,17 @@ class EmitC_ClassOp(IRDLOperation):
         NoTerminator(),
         MemoryAllocEffect()
     )
+
+    def __init__(self,
+        sym_name: SymbolRefAttr,
+        body: Region | Sequence[Block]
+    ):
+        super().__init__(
+            properties={
+                "sym_name": sym_name,
+            },
+            regions=[body]
+        )
 
     def get_block(self):
         if self.body.block:
@@ -843,7 +855,7 @@ class EmitC_FieldOp(IRDLOperation):
 
     name = "emitc.field"
 
-    sym_name = prop_def(StringAttr)
+    sym_name = prop_def(SymbolRefAttr)
     type = prop_def(TypeAttribute)
     initial_value = opt_prop_def(EmitC_OpaqueAttr | TypedAttribute)
 
@@ -885,7 +897,7 @@ class EmitC_FieldOp(IRDLOperation):
         if not parentOp or not isinstance(parentOp, EmitC_ClassOp):
             raise VerifyException("field must be nested within an emitc.class operation")
         name = self.sym_name
-        if not name or name.data == "":
+        if not name:
             raise VerifyException("field must have a non-empty symbol name")
 
 
@@ -906,7 +918,7 @@ class EmitC_GetFieldOp(IRDLOperation):
 
     name = "emitc.get_field"
 
-    field_name = prop_def(StringAttr)
+    field_name = prop_def(SymbolRefAttr)
     result = result_def(EmitCTypeConstr)
     assembly_format = "$field_name `:` type($result) attr-dict"
 
