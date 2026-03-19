@@ -10,9 +10,9 @@ See external [documentation](https://mlir.llvm.org/docs/Dialects/EmitC/).
 import abc
 from collections.abc import Iterable, Mapping, Sequence
 from enum import StrEnum
-from typing import Generic, Literal, Optional
+from typing import Generic, Literal, cast
 
-from typing_extensions import TypeVar, cast
+from typing_extensions import TypeVar
 
 from xdsl.dialects.builtin import (
     ArrayAttr,
@@ -33,7 +33,7 @@ from xdsl.dialects.builtin import (
     TensorType,
     TupleType,
     TypedAttribute,
-    UnitAttr
+    UnitAttr,
 )
 from xdsl.ir import (
     Attribute,
@@ -44,7 +44,7 @@ from xdsl.ir import (
     ParametrizedAttribute,
     Region,
     SSAValue,
-    TypeAttribute
+    TypeAttribute,
 )
 from xdsl.irdl import (
     AnyAttr,
@@ -70,8 +70,8 @@ from xdsl.parser import AttrParser
 from xdsl.printer import Printer
 from xdsl.traits import (
     IsolatedFromAbove,
-    NoTerminator,
     MemoryAllocEffect,
+    NoTerminator,
     Pure,
     RecursiveMemoryEffect,
     SymbolTable,
@@ -79,10 +79,11 @@ from xdsl.traits import (
 from xdsl.utils.exceptions import VerifyException
 from xdsl.utils.hints import isa
 
-'''
+"""
 [AutomaticAllocationScope, IsolatedFromAbove,
                          OpAsmOpInterface, SymbolTable,
-                         Symbol]#GraphRegionNoTerminator.traits'''
+                         Symbol]#GraphRegionNoTerminator.traits"""
+
 
 @irdl_attr_definition
 class EmitC_OpaqueType(ParametrizedAttribute, TypeAttribute):
@@ -332,7 +333,14 @@ class EmitC_PointerType(ParametrizedAttribute, TypeAttribute):
             raise VerifyException("pointers to lvalues are not allowed")
 
 
-EmitCFundamentalType = IndexType | EmitCPointerWideType | EmitCIntegerType | EmitCFloatType | EmitC_PointerType
+EmitCFundamentalType = (
+    IndexType
+    | EmitCPointerWideType
+    | EmitCIntegerType
+    | EmitCFloatType
+    | EmitC_PointerType
+)
+
 
 class EmitC_BinaryOperation(IRDLOperation, abc.ABC):
     """Base class for EmitC binary operations."""
@@ -363,15 +371,8 @@ class EmitC_UnaryOperation(IRDLOperation, abc.ABC):
 
     assembly_format = "operands attr-dict `:` functional-type(operands, results)"
 
-    def __init__(
-        self,
-        operand: SSAValue,
-        result_type: Attribute
-    ):
-        super().__init__(
-            operands=[operand],
-            result_types=[result_type]
-        )
+    def __init__(self, operand: SSAValue, result_type: Attribute):
+        super().__init__(operands=[operand], result_types=[result_type])
 
     def has_side_effects(self) -> bool:
         """If operand is fundamental type, the operation is pure."""
@@ -433,9 +434,7 @@ class EmitC_AddressOfOp(IRDLOperation):
 
     def verify_(self) -> None:
         if not isinstance(self.operand.type, EmitC_LValueType):
-            raise VerifyException(
-                "operand type must be an lvalue when applying `&`"
-            )
+            raise VerifyException("operand type must be an lvalue when applying `&`")
         if not isinstance(self.result.type, EmitC_PointerType):
             raise VerifyException("result type must be a pointer when applying `&`")
 
@@ -514,14 +513,13 @@ class EmitC_AssignOp(IRDLOperation):
         var: SSAValue,
         value: SSAValue,
     ):
-        super().__init__(
-            operands=[var, value],
-            result_types=[]
-        )
+        super().__init__(operands=[var, value], result_types=[])
 
     def verify_(self) -> None:
         if self.var.type != EmitC_LValueType(self.value.type):
-            raise VerifyException("'emitc.assign' op operands var and value must have the same type")
+            raise VerifyException(
+                "'emitc.assign' op operands var and value must have the same type"
+            )
 
 
 @irdl_op_definition
@@ -799,7 +797,9 @@ class EmitC_ClassOp(IRDLOperation):
 
     name = "emitc.class"
 
-    assembly_format = "(`final` $final_specifier^)? $sym_name attr-dict-with-keyword $body"
+    assembly_format = (
+        "(`final` $final_specifier^)? $sym_name attr-dict-with-keyword $body"
+    )
 
     sym_name = prop_def(SymbolRefAttr)
     final_specifier = prop_def(UnitAttr)
@@ -807,21 +807,15 @@ class EmitC_ClassOp(IRDLOperation):
     body = region_def()
 
     traits = traits_def(
-        SymbolTable(),
-        IsolatedFromAbove(),
-        NoTerminator(),
-        MemoryAllocEffect()
+        SymbolTable(), IsolatedFromAbove(), NoTerminator(), MemoryAllocEffect()
     )
 
-    def __init__(self,
-        sym_name: SymbolRefAttr,
-        body: Region | Sequence[Block]
-    ):
+    def __init__(self, sym_name: SymbolRefAttr, body: Region | Sequence[Block]):
         super().__init__(
             properties={
                 "sym_name": sym_name,
             },
-            regions=[body]
+            regions=[body],
         )
 
     def get_block(self):
@@ -829,8 +823,106 @@ class EmitC_ClassOp(IRDLOperation):
             return self.body.block
 
 
-#from xdsl.printer import Printer
-#from xdsl.parser import Parser
+@irdl_op_definition
+class EmitC_DoOp(IRDLOperation):
+    """
+    Do-while operation.
+
+    The `emitc.do` operation represents a C/C++ do-while loop construct that
+    repeatedly executes a body region as long as a condition region evaluates
+    to true. The operation has two regions:
+
+    1. A body region that contains the loop body
+    2. A condition region that must yield a boolean value (i1)
+
+    The condition is evaluated before each iteration as follows:
+    - The condition region must contain exactly one block with:
+      1. An `emitc.expression` operation producing an i1 value
+      2. An `emitc.yield` passing through the expression result
+    - The expression's body contains the actual condition logic
+
+    The body region is executed before the first evaluation of the
+    condition. Thus, there is a guarantee that the loop will be executed
+    at least once. The loop terminates when the condition yields false.
+
+    The canonical structure of `emitc.do` is:
+
+    ```mlir
+    emitc.do {
+      // Body region (no terminator required).
+      // Loop body operations...
+    } while {
+      // Condition region (must yield i1)
+      %condition = emitc.expression : () -> i1 {
+        // Condition computation...
+        %result = ... : i1  // Last operation must produce i1
+        emitc.yield %result : i1
+      }
+      // Forward expression result
+      emitc.yield %condition : i1
+    }
+    ```
+
+    Example:
+
+    ```mlir
+    emitc.func @do_example() {
+      %counter = "emitc.variable"() <{value = 0 : i32}> : () -> !emitc.lvalue<i32>
+      %end = emitc.literal "10" : i32
+      %step = emitc.literal "1" : i32
+
+      emitc.do {
+        // Print current value
+        %val = emitc.load %counter : !emitc.lvalue<i32>
+        emitc.verbatim "printf(\"%d\\n\", {});" args %val : i32
+
+        // Increment counter
+        %new_val = emitc.add %val, %step : (i32, i32) -> i32
+        "emitc.assign"(%counter, %new_val) : (!emitc.lvalue<i32>, i32) -> ()
+      } while {
+        %condition = emitc.expression %counter, %end : (!emitc.lvalue<i32>, i32) -> i1 {
+          %current = emitc.load %counter : !emitc.lvalue<i32>
+          %cmp_res = emitc.cmp lt, %current, %end : (i32, i32) -> i1
+          emitc.yield %cmp_res : i1
+        }
+        emitc.yield %condition : i1
+      }
+      return
+    }
+    ```
+    ```c++
+    // Code emitted for the operation above.
+    void do_example() {
+      int32_t v1 = 0;
+      do {
+        int32_t v2 = v1;
+        printf("%d\n", v2);
+        int32_t v3 = v2 + 1;
+        v1 = v3;
+      } while (v1 < 10);
+      return;
+    }
+    ```
+    """
+
+    name = "emitc.do"
+
+    irdl_options = (ParsePropInAttrDict(),)
+
+    bodyRegion = region_def()
+    conditionRegion = region_def()
+
+    traits = traits_def(
+        NoTerminator(),
+        RecursiveMemoryEffect(),
+    )
+
+    assembly_format = "attr-dict-with-keyword $bodyRegion `while` $conditionRegion "
+
+    def verify_(self) -> None:
+        pass
+
+
 @irdl_op_definition
 class EmitC_FieldOp(IRDLOperation):
     """
@@ -895,7 +987,9 @@ class EmitC_FieldOp(IRDLOperation):
     def verify_(self) -> None:
         parentOp = self.parent_op()
         if not parentOp or not isinstance(parentOp, EmitC_ClassOp):
-            raise VerifyException("field must be nested within an emitc.class operation")
+            raise VerifyException(
+                "field must be nested within an emitc.class operation"
+            )
         name = self.sym_name
         if not name:
             raise VerifyException("field must have a non-empty symbol name")
@@ -933,14 +1027,15 @@ class CmpPredicate(StrEnum):
     ne = "ne"
     lt = "lt"
     le = "le"
-    gt = 'gt'
+    gt = "gt"
     ge = "ge"
     three_way = "three_way"
 
+
 @irdl_attr_definition
 class EmitC_CmpPredicateAttr(
-        EnumAttribute[CmpPredicate] # pyright: ignore[reportInvalidTypeArguments]
-    ):
+    EnumAttribute[CmpPredicate]  # pyright: ignore[reportInvalidTypeArguments]
+):
     name = "emitc.cmp_predicate"
 
 
@@ -986,17 +1081,15 @@ class EmitC_CmpOp(EmitC_BinaryOperation):
     rhs = operand_def(EmitCTypeConstr)
     result = result_def(EmitCTypeConstr)
 
-    assembly_format = "$predicate `,` operands attr-dict `:` functional-type(operands, results)"
+    assembly_format = (
+        "$predicate `,` operands attr-dict `:` functional-type(operands, results)"
+    )
 
-    def __init__(
-        self,
-        pred : int,
-        lhs : SSAValue,
-        rhs : SSAValue,
-        result_type : Attribute
-    ):
+    def __init__(self, pred: int, lhs: SSAValue, rhs: SSAValue, result_type: Attribute):
         super().__init__(
-            lhs, rhs, result_type,
+            lhs,
+            rhs,
+            result_type,
         )
         self.predicate = EmitC_CmpPredicateAttr(CmpPredicate.gt)
 
@@ -1035,7 +1128,7 @@ class EmitC_ConditionalOp(IRDLOperation):
     false_value = operand_def(EmitCTypeConstr)
     result = result_def(EmitCTypeConstr)
 
-    #assembly_format = "operands attr-dict `:` type($result)"
+    # assembly_format = "operands attr-dict `:` type($result)"
 
     def has_side_effects(self) -> bool:
         return False
@@ -1047,7 +1140,7 @@ class EmitC_ConditionalOp(IRDLOperation):
 EmitC_OpaqueOrTypedAttr = EmitC_OpaqueAttr | TypedAttribute
 
 
-def isPointerWideType(type : TypeAttribute):
+def isPointerWideType(type: TypeAttribute):
     return isa(type, EmitC_SignedSizeT | EmitC_SizeT | EmitC_PtrDiffT)
 
 
@@ -1056,19 +1149,22 @@ class EmitCType(ParametrizedAttribute, TypeAttribute):
     """
     Type supported by EmitC
     """
+
     name = "emitc.base_t"
 
 
 # Check that the type of the initial value is compatible with the operations
 # result type.
 def verifyInitializationAttribute(op: IRDLOperation, value: Attribute) -> None:
-    assert len(op.results) == 1 and "operation must have 1 result"
+    assert len(op.results) == 1
 
     if isa(value, EmitC_OpaqueAttr):
         return
 
     if isa(value, StringAttr) or isinstance(value, StringAttr):
-        raise VerifyException("string attributes are not supported, use #emitc.opaque instead")
+        raise VerifyException(
+            "string attributes are not supported, use #emitc.opaque instead"
+        )
 
     resultType = op.results[0].type
     if isinstance(resultType, EmitC_LValueType):
@@ -1080,7 +1176,13 @@ def verifyInitializationAttribute(op: IRDLOperation, value: Attribute) -> None:
         return
 
     if resultType != attrType:
-        raise VerifyException("requires attribute to either be an #emitc.opaque attribute or it's type (" + str(attrType)+") to match the op's result type (" + str(resultType) + ")")
+        raise VerifyException(
+            "requires attribute to either be an #emitc.opaque attribute or it's type ("
+            + str(attrType)
+            + ") to match the op's result type ("
+            + str(resultType)
+            + ")"
+        )
 
     return
 
@@ -1101,24 +1203,23 @@ class EmitC_ConstantOp(IRDLOperation):
     value = prop_def(EmitC_OpaqueOrTypedAttr)
     result = result_def(EmitCTypeConstr)
 
-    def __init__(
-        self,
-        value: EmitC_OpaqueOrTypedAttr | IntegerAttr
-    ):
+    def __init__(self, value: EmitC_OpaqueOrTypedAttr | IntegerAttr):
         if isinstance(value, IntegerAttr):
-            res_type = value.type # pyright: ignore[reportUnknownVariableType, reportUnknownMemberType]
+            res_type = value.type  # pyright: ignore[reportUnknownVariableType, reportUnknownMemberType]
         else:
             res_type = EmitC_OpaqueType(StringAttr("std::string"))
         super().__init__(
-            properties={ "value": value }, # pyright: ignore[reportUnknownArgumentType]
-            result_types=[res_type] # pyright: ignore[reportUnknownArgumentType]
+            properties={"value": value},  # pyright: ignore[reportUnknownArgumentType]
+            result_types=[res_type],  # pyright: ignore[reportUnknownArgumentType]
         )
 
     def verify_(self) -> None:
         value = self.value
 
         if isa(value, StringAttr):
-            raise VerifyException("string attributes are not supported, use #emitc.opaque instead")
+            raise VerifyException(
+                "string attributes are not supported, use #emitc.opaque instead"
+            )
 
         verifyInitializationAttribute(self, value)
 
@@ -1127,7 +1228,6 @@ class EmitC_ConstantOp(IRDLOperation):
         if isinstance(value, EmitC_OpaqueType):
             if not value.value.data:
                 raise VerifyException("value must not be empty")
-
 
     def has_side_effects(self) -> bool:
         """Return True if the operation has side effects."""
@@ -1154,9 +1254,7 @@ class EmitC_DereferenceOp(IRDLOperation):
 
     def verify_(self) -> None:
         if not isinstance(self.operand.type, EmitC_PointerType):
-            raise VerifyException(
-                "operand type must be a pointer when applying `*`"
-            )
+            raise VerifyException("operand type must be a pointer when applying `*`")
 
     def has_side_effects(self) -> bool:
         """Return True if the operation has side effects."""
@@ -1189,19 +1287,13 @@ class EmitC_DivOp(EmitC_BinaryOperation):
 
     lhs = operand_def(EmitCFloatType | EmitCIntegerType | IndexType | EmitC_OpaqueType)
     rhs = operand_def(EmitCFloatType | EmitCIntegerType | IndexType | EmitC_OpaqueType)
-    result = result_def(EmitCFloatType | EmitCIntegerType | IndexType | EmitC_OpaqueType)
+    result = result_def(
+        EmitCFloatType | EmitCIntegerType | IndexType | EmitC_OpaqueType
+    )
 
-    def __init__(
-        self,
-        lhs: SSAValue,
-        rhs: SSAValue,
-        result_type: Attribute
-    ):
-        super().__init__(
-            lhs,
-            rhs,
-            result_type
-        )
+    def __init__(self, lhs: SSAValue, rhs: SSAValue, result_type: Attribute):
+        super().__init__(lhs, rhs, result_type)
+
 
 class EmitC_YieldOp(IRDLOperation):
     """
@@ -1253,9 +1345,7 @@ class EmitC_IfOp(IRDLOperation):
     thenRegion = region_def("single_block")
     elseRegion = region_def()
 
-    traits = traits_def(
-        RecursiveMemoryEffect(), NoTerminator()
-    )
+    traits = traits_def(RecursiveMemoryEffect(), NoTerminator())
 
     def __init__(
         self,
@@ -1271,10 +1361,10 @@ class EmitC_IfOp(IRDLOperation):
             operands=[cond],
             result_types=[],
             regions=[thenRegion, elseRegion],
-            attributes=attr_dict
+            attributes=attr_dict,
         )
 
-    irdl_options = (ParsePropInAttrDict(), )
+    irdl_options = (ParsePropInAttrDict(),)
     assembly_format = "attr-dict $condition  $thenRegion (`else` $elseRegion^)?"
 
 
@@ -1307,21 +1397,16 @@ class EmitC_IncludeOp(IRDLOperation):
     include = prop_def(StringAttr)
     is_standard_include = opt_prop_def(UnitAttr)
 
-    irdl_options = (ParsePropInAttrDict(), )
+    irdl_options = (ParsePropInAttrDict(),)
 
     assembly_format = "attr-dict ` `(`<` $is_standard_include^)? $include `>`"
 
     def __init__(
-        self,
-        include : StringAttr,
-        is_standard_include : Optional[UnitAttr] = None
+        self, include: StringAttr, is_standard_include: UnitAttr | None = None
     ):
         super().__init__(
             operands=[],
-            properties={
-                "include": include,
-                "is_standard_include" : is_standard_include
-            }
+            properties={"include": include, "is_standard_include": is_standard_include},
         )
 
 
@@ -1386,18 +1471,13 @@ class EmitC_LoadOp(IRDLOperation):
 
     irdl_options = (ParsePropInAttrDict(),)
 
-    #assembly_format = "$operand attr-dict `:` type($operand)"
+    # assembly_format = "$operand attr-dict `:` type($operand)"
 
-    def __init__(self,
-        op: SSAValue
-        ):
+    def __init__(self, op: SSAValue):
         op_type = op.type
-        assert(isinstance(op_type, EmitC_LValueType))
+        assert isinstance(op_type, EmitC_LValueType)
         res_type = op_type.value_type
-        super().__init__(
-            operands=[op],
-            result_types=[res_type]
-            )
+        super().__init__(operands=[op], result_types=[res_type])
 
 
 @irdl_op_definition
@@ -1504,19 +1584,16 @@ class EmitC_MemberOfPtrOp(IRDLOperation):
     operand = operand_def(EmitC_LValueType)
     result = result_def(EmitC_ArrayType | EmitC_LValueType)
 
-    def __init__(
-          self,
-          operand: SSAValue,
-          member: str,
-          result_type: Attribute
-    ):
+    def __init__(self, operand: SSAValue, member: str, result_type: Attribute):
         if not isinstance(operand.type, EmitC_OpaqueAttr | EmitC_PointerType):
-            raise VerifyException("emitc.member_of_ptr expects an opaque or pointer operand type")
+            raise VerifyException(
+                "emitc.member_of_ptr expects an opaque or pointer operand type"
+            )
 
         super().__init__(
             operands=[operand],
-            properties={"member" : StringAttr(member)},
-            result_types=[result_type]
+            properties={"member": StringAttr(member)},
+            result_types=[result_type],
         )
 
 
@@ -1544,19 +1621,14 @@ class EmitC_MemberOp(IRDLOperation):
     operand = operand_def(EmitC_LValueType)
     result = result_def(EmitC_ArrayType | EmitC_LValueType)
 
-    def __init__(
-          self,
-          operand: SSAValue,
-          member: str,
-          result_type: Attribute
-    ):
+    def __init__(self, operand: SSAValue, member: str, result_type: Attribute):
         if not isinstance(operand.type, EmitC_OpaqueAttr):
             raise VerifyException("emitc.member expects an opaque operand type")
 
         super().__init__(
             operands=[operand],
-            properties={"member" : StringAttr(member)},
-            result_types=[result_type]
+            properties={"member": StringAttr(member)},
+            result_types=[result_type],
         )
 
 
@@ -1586,19 +1658,12 @@ class EmitC_MulOp(EmitC_BinaryOperation):
 
     lhs = operand_def(EmitCFloatType | EmitCIntegerType | IndexType | EmitC_OpaqueType)
     rhs = operand_def(EmitCFloatType | EmitCIntegerType | IndexType | EmitC_OpaqueType)
-    result = result_def(EmitCFloatType | EmitCIntegerType | IndexType | EmitC_OpaqueType)
+    result = result_def(
+        EmitCFloatType | EmitCIntegerType | IndexType | EmitC_OpaqueType
+    )
 
-    def __init__(
-        self,
-        lhs: SSAValue,
-        rhs: SSAValue,
-        result_type: Attribute
-    ):
-        super().__init__(
-            lhs,
-            rhs,
-            result_type
-        )
+    def __init__(self, lhs: SSAValue, rhs: SSAValue, result_type: Attribute):
+        super().__init__(lhs, rhs, result_type)
 
 
 @irdl_op_definition
@@ -1627,17 +1692,8 @@ class EmitC_RemOp(EmitC_BinaryOperation):
     rhs = operand_def(EmitCIntegerType | IndexType | EmitC_OpaqueType)
     result = result_def(EmitCIntegerType | IndexType | EmitC_OpaqueType)
 
-    def __init__(
-        self,
-        lhs: SSAValue,
-        rhs: SSAValue,
-        result_type: Attribute
-    ):
-        super().__init__(
-            lhs,
-            rhs,
-            result_type
-        )
+    def __init__(self, lhs: SSAValue, rhs: SSAValue, result_type: Attribute):
+        super().__init__(lhs, rhs, result_type)
 
 
 @irdl_op_definition
@@ -1715,16 +1771,14 @@ class EmitC_SubscriptOp(IRDLOperation):
     indices = var_operand_def(EmitCTypeConstr)
     result = result_def(EmitC_LValueType)
 
-    assembly_format = "$value `[` $indices `]` attr-dict `:` functional-type(operands, results)"
+    assembly_format = (
+        "$value `[` $indices `]` attr-dict `:` functional-type(operands, results)"
+    )
 
-    def __init__(
-        self,
-        value: SSAValue,
-        indices: Sequence[SSAValue]
-    ):
+    def __init__(self, value: SSAValue, indices: Sequence[SSAValue]):
         # array[i]
         if isinstance(value.type, EmitC_ArrayType):
-            res_type = EmitC_LValueType(value.type.element_type) # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]
+            res_type = EmitC_LValueType(value.type.element_type)  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]
 
         # ptr[i]
         elif isinstance(value.type, EmitC_PointerType):
@@ -1737,10 +1791,7 @@ class EmitC_SubscriptOp(IRDLOperation):
         else:
             raise VerifyException(f"Unsupported type for emitc.subscript: {value.type}")
 
-        super().__init__(
-            operands=[value, *indices],
-            result_types=[res_type]
-        )
+        super().__init__(operands=[value, *indices], result_types=[res_type])
 
     def verify_(self) -> None:
         val_type = self.value.type
@@ -1748,12 +1799,14 @@ class EmitC_SubscriptOp(IRDLOperation):
         # array[i]
         if isinstance(val_type, EmitC_ArrayType):
             if len(self.indices) != len(val_type.shape):
-                raise VerifyException(f"Array subscript expects {len(val_type.shape)} indices, got {len(self.indices)}")
+                raise VerifyException(
+                    f"Array subscript expects {len(val_type.shape)} indices, got {len(self.indices)}"
+                )
 
         # ptr[i]
         if isinstance(val_type, EmitC_PointerType):
             if len(self.indices) != 1:
-                raise VerifyException(f"Pointer subscript expects exactly one index")
+                raise VerifyException("Pointer subscript expects exactly one index")
 
         # opaque
         if isinstance(val_type, EmitC_OpaqueType):
@@ -1824,19 +1877,12 @@ class EmitC_VariableOp(IRDLOperation):
     value = prop_def(EmitC_OpaqueOrTypedAttr)
     result = result_def(EmitC_ArrayType | EmitC_LValueType)
 
-    #assembly_format = " attr-dict $value `:` type(results)"
+    # assembly_format = " attr-dict $value `:` type(results)"
 
     def __init__(
-        self,
-        value: EmitC_OpaqueOrTypedAttr | IntegerAttr,
-        result_types : Attribute
+        self, value: EmitC_OpaqueOrTypedAttr | IntegerAttr, result_types: Attribute
     ):
-        super().__init__(
-            properties={
-                "value": value
-            },
-            result_types=[result_types]
-        )
+        super().__init__(properties={"value": value}, result_types=[result_types])
 
     def verify_(self) -> None:
         value = self.value
@@ -1844,7 +1890,9 @@ class EmitC_VariableOp(IRDLOperation):
             raise VerifyException("'emitc.variable' op requires attribute 'value'")
 
         if value and not isa(value, EmitC_OpaqueOrTypedAttr):
-            raise VerifyException("'emitc.variable' op attribute 'value' failed to satisfy constraint: An opaque attribute or TypedAttr instance")
+            raise VerifyException(
+                "'emitc.variable' op attribute 'value' failed to satisfy constraint: An opaque attribute or TypedAttr instance"
+            )
 
     def has_side_effects(self) -> bool:
         return True
@@ -1909,15 +1957,14 @@ class EmitC_VerbatimOp(IRDLOperation):
 
     assembly_format = "$value (`args` $fmtArgs^ `:` type($fmtArgs))? attr-dict"
 
-    def __init__(self,
+    def __init__(
+        self,
         value: StringAttr,
         operands: Sequence[AnyAttr],
     ):
         super().__init__(
-            operands=[operands], # pyright: ignore[reportArgumentType]
-            properties={
-                "value" : value
-            }
+            operands=[operands],  # pyright: ignore[reportArgumentType]
+            properties={"value": value},
         )
 
     def verify_(self) -> None:
@@ -1966,7 +2013,7 @@ EmitC = Dialect(
         EmitC_UnaryPlusOp,
         EmitC_VariableOp,
         EmitC_VerbatimOp,
-        EmitC_YieldOp
+        EmitC_YieldOp,
     ],
     [
         EmitC_ArrayType,
