@@ -1,5 +1,7 @@
 from xdsl.dialects.builtin import DYNAMIC_INDEX, MemRefType
+from xdsl.dialects.math import RoundEvenOp
 from xdsl.dialects.memref import CastOp
+from xdsl.dialects.tpu_conversions import FPToSIOp, RoundingMode
 from xdsl.dialects.tpu_memref import (
     EraseLayoutOp,
     MemRefSliceOp,
@@ -137,3 +139,17 @@ class MemRefSqueezeFoldCast(RewritePattern):
         )
         cast = CastOp.get(new_squeeze.result, squeeze_result_type)
         rewriter.replace_matched_op([new_squeeze, cast])
+
+
+class FPToSISinkRoundEven(RewritePattern):
+    @op_type_rewrite_pattern
+    def match_and_rewrite(self, op: FPToSIOp, rewriter: PatternRewriter) -> None:
+        producer = op.input.owner
+        if not isinstance(producer, RoundEvenOp):
+            return
+        new_op = FPToSIOp(
+            input_=producer.operand,
+            target_type=op.output.type,
+            rounding_mode=RoundingMode.To_Nearest_Even,
+        )
+        rewriter.replace_matched_op(new_op)

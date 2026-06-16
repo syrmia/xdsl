@@ -57,8 +57,7 @@ def test_rounding_mode_attr_round_trip():
 
 def test_fp_to_si_op_basic():
     val = create_ssa_value(f32)
-    op = FPToSIOp(val, target_type=i32,
-                  rounding_mode=RoundingMode.To_Nearest_Even)
+    op = FPToSIOp(val, target_type=i32, rounding_mode=RoundingMode.To_Nearest_Even)
     op.verify()
     assert op.input.type == f32
     assert op.output.type == i32
@@ -66,8 +65,11 @@ def test_fp_to_si_op_basic():
 
 def test_fp_to_si_op_vector():
     val = create_ssa_value(VectorType(f32, [8, 128]))
-    op = FPToSIOp(val, target_type=VectorType(i32, [8, 128]),
-                  rounding_mode=RoundingMode.Towards_Zero)
+    op = FPToSIOp(
+        val,
+        target_type=VectorType(i32, [8, 128]),
+        rounding_mode=RoundingMode.Towards_Zero,
+    )
     op.verify()
 
 
@@ -81,43 +83,45 @@ def test_fp_to_si_op_accepts_attr_for_rounding_mode():
 
 def test_fp_to_ui_op_basic():
     val = create_ssa_value(f32)
-    op = FPToUIOp(val, target_type=i32,
-                  rounding_mode=RoundingMode.To_Nearest_Even)
+    op = FPToUIOp(val, target_type=i32, rounding_mode=RoundingMode.To_Nearest_Even)
     op.verify()
 
 
 def test_fp_to_ui_op_vector():
     val = create_ssa_value(VectorType(f32, [8]))
-    op = FPToUIOp(val, target_type=VectorType(i32, [8]),
-                  rounding_mode=RoundingMode.Towards_Zero)
+    op = FPToUIOp(
+        val, target_type=VectorType(i32, [8]), rounding_mode=RoundingMode.Towards_Zero
+    )
     op.verify()
 
 
 def test_si_to_fp_op_basic():
     val = create_ssa_value(i32)
-    op = SIToFPOp(val, target_type=f32,
-                  rounding_mode=RoundingMode.To_Nearest_Even)
+    op = SIToFPOp(val, target_type=f32, rounding_mode=RoundingMode.To_Nearest_Even)
     op.verify()
 
 
 def test_si_to_fp_op_vector():
     val = create_ssa_value(VectorType(i32, [8, 128]))
-    op = SIToFPOp(val, target_type=VectorType(f32, [8, 128]),
-                  rounding_mode=RoundingMode.To_Nearest_Even)
+    op = SIToFPOp(
+        val,
+        target_type=VectorType(f32, [8, 128]),
+        rounding_mode=RoundingMode.To_Nearest_Even,
+    )
     op.verify()
 
 
 def test_ui_to_fp_op_basic():
     val = create_ssa_value(i32)
-    op = UIToFPOp(val, target_type=f32,
-                  rounding_mode=RoundingMode.To_Nearest_Even)
+    op = UIToFPOp(val, target_type=f32, rounding_mode=RoundingMode.To_Nearest_Even)
     op.verify()
 
 
 def test_ui_to_fp_op_vector():
     val = create_ssa_value(VectorType(i32, [16]))
-    op = UIToFPOp(val, target_type=VectorType(f32, [16]),
-                  rounding_mode=RoundingMode.Towards_Zero)
+    op = UIToFPOp(
+        val, target_type=VectorType(f32, [16]), rounding_mode=RoundingMode.Towards_Zero
+    )
     op.verify()
 
 
@@ -135,15 +139,19 @@ def test_ext_f_op_vector():
 
 def test_trunc_f_op_basic():
     val = create_ssa_value(f32)
-    op = TruncFOp(val, target_type=Float16Type(),
-                  rounding_mode=RoundingMode.To_Nearest_Even)
+    op = TruncFOp(
+        val, target_type=Float16Type(), rounding_mode=RoundingMode.To_Nearest_Even
+    )
     op.verify()
 
 
 def test_trunc_f_op_vector():
     val = create_ssa_value(VectorType(f32, [8, 128]))
-    op = TruncFOp(val, target_type=VectorType(Float16Type(), [8, 128]),
-                  rounding_mode=RoundingMode.Towards_Zero)
+    op = TruncFOp(
+        val,
+        target_type=VectorType(Float16Type(), [8, 128]),
+        rounding_mode=RoundingMode.Towards_Zero,
+    )
     op.verify()
 
 
@@ -168,9 +176,9 @@ def test_reciprocal_op_custom_approx():
 
 def test_reciprocal_op_custom_full_range_false():
     val = create_ssa_value(VectorType(f32, [8]))
-    op = ReciprocalOp(val, target_type=VectorType(f32, [8]),
-                      full_range=False)
-    assert op.full_range.value.data == 0 
+    op = ReciprocalOp(val, target_type=VectorType(f32, [8]), full_range=False)
+    assert op.full_range.value.data == 0
+
 
 def test_weird_op_scalar():
     val = create_ssa_value(f32)
@@ -182,6 +190,7 @@ def test_weird_op_vector():
     val = create_ssa_value(VectorType(f32, [8, 128]))
     op = WeirdOp(val, target_type=VectorType(i1, [8, 128]))
     op.verify()
+
 
 def test_dialect_registers_conversion_attrs():
     registered = set(TPU.attributes)
