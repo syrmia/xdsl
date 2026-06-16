@@ -16,6 +16,14 @@ from xdsl.dialects.tpu_memref import (
     _compute_squeezed_dims,
 )
 from xdsl.dialects.tpu_pack import PackSubelementsOp, UnpackSubelementsOp
+from xdsl.dialects.tpu_shape import (
+    BitcastVregOp,
+    DynamicGatherOp,
+    ReshapeOp,
+    RollVectorsOp,
+    UnrollVectorsOp,
+)
+from xdsl.dialects.vector import BroadcastOp
 from xdsl.ir import Attribute, SSAValue
 from xdsl.pattern_rewriter import (
     PatternRewriter,
@@ -302,3 +310,52 @@ class UnpackOfPackSignExtensionDemote(RewritePattern):
             unsigned_integers=op.unsigned_integers.value.data,
         )
         rewriter.replace_matched_op(new_unpack)
+
+
+class BitcastVregChainCollapse(RewritePattern):
+    @op_type_rewrite_pattern
+    def match_and_rewrite(self, op: BitcastVregOp, rewriter: PatternRewriter) -> None:
+        defining_op = op.input.owner
+        if not isinstance(defining_op, BitcastVregOp):
+            return
+        new_op = BitcastVregOp(defining_op.input, op.output.type)
+        rewriter.replace_matched_op(new_op)
+
+
+class ReshapeOfReshape(RewritePattern):
+    @op_type_rewrite_pattern
+    def match_and_rewrite(self, op: ReshapeOp, rewriter: PatternRewriter) -> None:
+        defining_op = op.source.owner
+        if not isinstance(defining_op, ReshapeOp):
+            return
+        new_op = ReshapeOp(defining_op.source, op.result.type)
+        rewriter.replace_matched_op(new_op)
+
+
+class UnrollOfRollCancel(RewritePattern):
+    @op_type_rewrite_pattern
+    def match_and_rewrite(self, op: UnrollVectorsOp, rewriter: PatternRewriter) -> None:
+        producer = op.input.owner
+        if not isinstance(producer, RollVectorsOp):
+            return
+        if len(producer.input) != len(op.output):
+            return
+        for roll_operand, unroll_result in zip(producer.input, op.output):
+            if roll_operand.type != unroll_result.type:
+                return
+        rewriter.replace_matched_op([], new_results=list(producer.input))
+
+
+class DynamicGatherToBroadcast(RewritePattern):
+    @op_type_rewrite_pattern
+    def match_and_rewrite(self, op: DynamicGatherOp, rewriter: PatternRewriter) -> None:
+        src_ty = op.source.type
+        if not isinstance(src_ty, VectorType):
+            return
+        src_shape = src_ty.get_shape()
+        dimensions = list(op.dimensions.get_values())
+        for d in dimensions:
+            if d < 0 or d >= len(src_shape) or src_shape[d] != 1:
+                return
+        new_op = BroadcastOp(op.source, op.output.type)
+        rewriter.replace_matched_op(new_op)
