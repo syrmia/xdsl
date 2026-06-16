@@ -2,6 +2,7 @@ from xdsl.dialects.builtin import DYNAMIC_INDEX, MemRefType
 from xdsl.dialects.math import RoundEvenOp
 from xdsl.dialects.memref import CastOp
 from xdsl.dialects.tpu_conversions import FPToSIOp, RoundingMode
+from xdsl.dialects.tpu_memory import LoadOp, ShuffledLoadOp, ShuffledStoreOp, StoreOp
 from xdsl.dialects.tpu_memref import (
     EraseLayoutOp,
     MemRefSliceOp,
@@ -151,5 +152,38 @@ class FPToSISinkRoundEven(RewritePattern):
             input_=producer.operand,
             target_type=op.output.type,
             rounding_mode=RoundingMode.To_Nearest_Even,
+        )
+        rewriter.replace_matched_op(new_op)
+
+
+class ShuffledLoadToSimpleLoad(RewritePattern):
+    @op_type_rewrite_pattern
+    def match_and_rewrite(self, op: ShuffledLoadOp, rewriter: PatternRewriter) -> None:
+        offsets = list(op.sublane_offsets.get_values())
+        for i, offset in enumerate(offsets):
+            if offset != i:
+                return
+        new_op = LoadOp(
+            base=op.base,
+            indices=list(op.indices),
+            sublane_mask=op.sublane_mask,
+            result_type=op.result.type,
+        )
+        rewriter.replace_matched_op(new_op)
+
+
+class ShuffledStoreToSimpleStore(RewritePattern):
+    @op_type_rewrite_pattern
+    def match_and_rewrite(self, op: ShuffledStoreOp, rewriter: PatternRewriter) -> None:
+        offsets = list(op.sublane_offsets.get_values())
+        for i, offset in enumerate(offsets):
+            if offset != i:
+                return
+        new_op = StoreOp(
+            op.value_to_store,
+            op.base,
+            list(op.indices),
+            op.sublane_mask,
+            None,
         )
         rewriter.replace_matched_op(new_op)
