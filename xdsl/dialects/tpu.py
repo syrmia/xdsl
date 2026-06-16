@@ -28,6 +28,17 @@ from xdsl.dialects.tpu_conversions import (
     UIToFPOp,
     WeirdOp,
 )
+from xdsl.dialects.tpu_dma_sem import (
+    AllocaSemaphoreOp,
+    BarrierOp,
+    DeviceIdOp,
+    EnqueueDMAOp,
+    GetBarrierSemaphoreOp,
+    SemaphoreReadOp,
+    SemaphoreSignalOp,
+    SemaphoreWaitOp,
+    WaitDMA2Op,
+)
 from xdsl.dialects.tpu_memory import (
     LoadOp,
     ShuffledLoadOp,
@@ -450,6 +461,15 @@ TPU = Dialect(
         CreateMaskOp,
         CreateSubelementMaskOp,
         SublaneShuffleOp,
+        SemaphoreReadOp,
+        SemaphoreWaitOp,
+        AllocaSemaphoreOp,
+        GetBarrierSemaphoreOp,
+        BarrierOp,
+        SemaphoreSignalOp,
+        EnqueueDMAOp,
+        WaitDMA2Op,
+        DeviceIdOp,
     ],
     [
         CoreTypeAttr,
