@@ -1,4 +1,10 @@
-from xdsl.dialects.builtin import DYNAMIC_INDEX, MemRefType
+from xdsl.dialects.builtin import (
+    DYNAMIC_INDEX,
+    IntegerType,
+    MemRefType,
+    Signedness,
+    VectorType,
+)
 from xdsl.dialects.math import RoundEvenOp
 from xdsl.dialects.memref import CastOp
 from xdsl.dialects.tpu_conversions import FPToSIOp, RoundingMode
@@ -9,7 +15,8 @@ from xdsl.dialects.tpu_memref import (
     MemRefSqueezeOp,
     _compute_squeezed_dims,
 )
-from xdsl.ir import SSAValue
+from xdsl.dialects.tpu_pack import PackSubelementsOp, UnpackSubelementsOp
+from xdsl.ir import Attribute, SSAValue
 from xdsl.pattern_rewriter import (
     PatternRewriter,
     RewritePattern,
@@ -187,3 +194,111 @@ class ShuffledStoreToSimpleStore(RewritePattern):
             None,
         )
         rewriter.replace_matched_op(new_op)
+
+
+def _fill_positions(
+    values: list[SSAValue], positions: list[int], size: int
+) -> list[SSAValue | None]:
+    result: list[SSAValue[Attribute] | None] = [None] * size
+    for value, position in zip(values, positions):
+        result[position] = value
+    return result
+
+
+class UnpackOfPackCancel(RewritePattern):
+    @op_type_rewrite_pattern
+    def match_and_rewrite(
+        self, op: UnpackSubelementsOp, rewriter: PatternRewriter
+    ) -> None:
+        src_ty = op.source.type
+        dst_ty = op.output.type
+        if not (isinstance(src_ty, VectorType)):
+            return
+        src_elem = src_ty.element_type
+        dst_elem = dst_ty.element_type
+        if not isinstance(src_elem, IntegerType):
+            return
+        if not isinstance(dst_elem, IntegerType):
+            return
+        if src_elem.signedness.data != Signedness.SIGNLESS:
+            return
+        if dst_elem.signedness.data != Signedness.SIGNLESS:
+            return
+
+        if op.integer_extended.value.data:
+            return
+
+        producer = op.source.owner
+        if not isinstance(producer, PackSubelementsOp):
+            return
+
+        if producer.pack_format != op.pack_format:
+            return
+
+        if len(producer.sources) == 0:
+            return
+        if producer.sources[0].type != op.output.type:
+            return
+
+        src_bw = src_elem.width.data
+        dst_bw = dst_elem.width.data
+        if dst_bw == 0 or dst_bw % src_bw != 0:
+            return
+        packing_factor = dst_bw // src_bw
+
+        positions = list(producer.positions.get_values())
+        filled = _fill_positions(list(producer.sources), positions, packing_factor)
+
+        index = op.index.value.data
+        if index >= len(filled):
+            return
+        source = filled[index]
+        if source is None:
+            return
+
+        rewriter.replace_matched_op([], new_results=[source])
+
+
+class UnpackOfPackSignExtensionDemote(RewritePattern):
+    @op_type_rewrite_pattern
+    def match_and_rewrite(
+        self, op: UnpackSubelementsOp, rewriter: PatternRewriter
+    ) -> None:
+        if not op.integer_extended.value.data:
+            return
+        src_ty = op.source.type
+        if not isinstance(src_ty, VectorType):
+            return
+        src_elem = src_ty.element_type
+        if not isinstance(src_elem, IntegerType):
+            return
+        src_bw = src_elem.width.data
+
+        users = list(op.output.uses)
+        if len(users) == 0:
+            return
+
+        for use in users:
+            user_op = use.operation
+            if not isinstance(user_op, PackSubelementsOp):
+                return
+            packed_ty = user_op.output.type
+            if not isinstance(packed_ty, VectorType):
+                return
+            packed_elem = packed_ty.element_type
+            if not isinstance(packed_elem, IntegerType):
+                return
+            if packed_elem.signedness.data != Signedness.SIGNLESS:
+                return
+            if packed_elem.width.data > src_bw:
+                return
+
+        new_unpack = UnpackSubelementsOp(
+            source=op.source,
+            index=op.index,
+            pack_format=op.pack_format,
+            result_type=op.output.type,
+            integer_extended=False,
+            unsigned_integers=op.unsigned_integers.value.data,
+        )
+        rewriter.replace_matched_op(new_unpack)
