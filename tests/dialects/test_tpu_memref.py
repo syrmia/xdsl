@@ -16,6 +16,7 @@ from xdsl.dialects.tpu_memref import (
     CoreType,
     CoreTypeAttr,
     DMASemaphoreType,
+    EraseLayoutOp,
     MemorySpace,
     MemorySpaceAttr,
     MemRefBitcastOp,
@@ -92,6 +93,7 @@ def test_memory_space_attr_round_trip_with_core_type():
     parsed = Parser(ctx, printed).parse_attribute()
     assert parsed == attr
 
+
 def test_semaphore_type_construction():
     ty = SemaphoreType()
     assert isinstance(ty, SemaphoreType)
@@ -153,12 +155,11 @@ def test_memref_slice_basic():
     idx0 = create_ssa_value(i32)
     idx1 = create_ssa_value(i32)
     out_ty = MemRefType(f32, [16, 128])
-    op = MemRefSliceOp.create(
-        operands=[mem, idx0, idx1],
+    op = MemRefSliceOp.build(
+        operands=[mem, [idx0, idx1], []],
         result_types=[out_ty],
-        properties={"operandSegmentSizes":
-                    create_ssa_value(i32).type}, 
-    ) if False else None
+    )
+    op.verify()
 
 
 def test_memref_slice_rejects_dynamic_source():
@@ -211,7 +212,7 @@ def test_memref_squeeze_rejects_element_type_mismatch():
 
 def test_memref_squeeze_rejects_incompatible_shapes():
     input = create_ssa_value(MemRefType(f32, [4, 1, 8]))
-    out_ty = MemRefType(f32, [4, 16])    # 8 vs 16 doesn't match
+    out_ty = MemRefType(f32, [4, 16])
     op = MemRefSqueezeOp.build(operands=[input], result_types=[out_ty])
     with pytest.raises(VerifyException, match="not compatible for squeezing"):
         op.verify()
@@ -233,8 +234,8 @@ def test_memref_reshape_rejects_1d():
 
 
 def test_memref_reshape_rejects_element_count_mismatch():
-    input = create_ssa_value(MemRefType(f32, [4, 8]))   
-    out_ty = MemRefType(f32, [4, 16]) 
+    input = create_ssa_value(MemRefType(f32, [4, 8]))
+    out_ty = MemRefType(f32, [4, 16])
     op = MemRefReshapeOp.build(operands=[input], result_types=[out_ty])
     with pytest.raises(VerifyException, match="Number of elements"):
         op.verify()
@@ -280,7 +281,7 @@ def test_memref_bitcast_rejects_1d():
 
 def test_memref_bitcast_rejects_bad_bit_count():
     input = create_ssa_value(MemRefType(IntegerType(16), [16, 8]))
-    out_ty = MemRefType(IntegerType(32), [7, 8])    # 7*32 != 16*16
+    out_ty = MemRefType(IntegerType(32), [7, 8])
     op = MemRefBitcastOp.build(operands=[input], result_types=[out_ty])
     with pytest.raises(VerifyException, match="same number of bits"):
         op.verify()
@@ -288,7 +289,7 @@ def test_memref_bitcast_rejects_bad_bit_count():
 
 def test_memref_bitcast_rejects_non_minormost_dim_mismatch():
     input = create_ssa_value(MemRefType(f32, [16, 8]))
-    out_ty = MemRefType(f32, [16, 9])    # dim 1 differs without bitwidth diff
+    out_ty = MemRefType(f32, [16, 9])
     op = MemRefBitcastOp.build(operands=[input], result_types=[out_ty])
     with pytest.raises(VerifyException, match="same dim size on dim"):
         op.verify()
@@ -298,7 +299,7 @@ def test_reinterpret_cast_basic():
     input = create_ssa_value(MemRefType(f32, [16, 8]))
     out_ty = MemRefType(f32, [128])
     op = ReinterpretCastOp.build(
-        operands=[input, []],  
+        operands=[input, []],
         result_types=[out_ty],
     )
     op.verify()
@@ -366,3 +367,36 @@ def test_round_trip_semaphore_type():
 
     parsed = Parser(ctx, printed).parse_type()
     assert parsed == ty
+
+
+def test_erase_layout_basic():
+    input = create_ssa_value(MemRefType(f32, [16, 8]))
+    out_ty = MemRefType(f32, [16, 8])
+    op = EraseLayoutOp.build(operands=[input], result_types=[out_ty])
+    op.verify()
+
+
+def test_erase_layout_erases_memory_space():
+    space = MemorySpaceAttr(MemorySpace.Vmem)
+    input = create_ssa_value(MemRefType(f32, [16, 8], memory_space=space))
+    out_ty = MemRefType(f32, [16, 8])
+    op = EraseLayoutOp.build(operands=[input], result_types=[out_ty])
+    op.verify()
+
+
+def test_erase_layout_rejects_element_type_change():
+    input = create_ssa_value(MemRefType(f32, [16, 8]))
+    out_ty = MemRefType(i32, [16, 8])
+    op = EraseLayoutOp.build(operands=[input], result_types=[out_ty])
+    with pytest.raises(VerifyException, match="Cannot change the memref element type"):
+        op.verify()
+
+
+def test_erase_layout_rejects_changed_memory_space():
+    space_a = MemorySpaceAttr(MemorySpace.Vmem)
+    space_b = MemorySpaceAttr(MemorySpace.Smem)
+    input = create_ssa_value(MemRefType(f32, [16, 8], memory_space=space_a))
+    out_ty = MemRefType(f32, [16, 8], memory_space=space_b)
+    op = EraseLayoutOp.build(operands=[input], result_types=[out_ty])
+    with pytest.raises(VerifyException, match="Memory spaces do not match"):
+        op.verify()

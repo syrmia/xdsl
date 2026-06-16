@@ -1,5 +1,5 @@
+from collections.abc import Sequence
 from enum import auto
-from typing import Sequence
 
 from xdsl.dialects.builtin import (
     I32,
@@ -10,48 +10,115 @@ from xdsl.dialects.builtin import (
     IndexType,
     IntegerAttr,
     IntegerType,
+    NoneAttr,
     StringAttr,
     VectorType,
-    i32,
     f32,
-    i64
+    i32,
+    i64,
 )
-
-from xdsl.dialects.tpu_memref import *
-from xdsl.dialects.tpu_conversions import *
-from xdsl.dialects.tpu_shape import *
-from xdsl.dialects.tpu_memory import *
-from xdsl.dialects.tpu_pack import *
-
+from xdsl.dialects.tpu_conversions import (
+    ExtFOp,
+    FPToSIOp,
+    FPToUIOp,
+    ReciprocalOp,
+    RoundingModeAttr,
+    SIToFPOp,
+    TruncFOp,
+    UIToFPOp,
+    WeirdOp,
+)
+from xdsl.dialects.tpu_memory import (
+    LoadOp,
+    ShuffledLoadOp,
+    ShuffledStoreOp,
+    StoreOp,
+    StridedLoadOp,
+    StridedStoreOp,
+    VectorLoadIdxOp,
+    VectorLoadOp,
+    VectorStoreIdxOp,
+    VectorStoreOp,
+)
+from xdsl.dialects.tpu_memref import (
+    CoreTypeAttr,
+    DMASemaphoreType,
+    MemorySpaceAttr,
+    MemRefBitcastOp,
+    MemRefReshapeOp,
+    MemRefSliceOp,
+    MemRefSqueezeOp,
+    ReinterpretCastOp,
+    SemaphoreType,
+    TiledLayoutAttr,
+)
+from xdsl.dialects.tpu_pack import (
+    CreateMaskOp,
+    CreateSubelementMaskOp,
+    PackElementwiseOp,
+    PackMaskOp,
+    PackSubelementsOp,
+    SublaneShuffleOp,
+    UnpackElementwiseOp,
+    UnpackSubelementsOp,
+)
+from xdsl.dialects.tpu_shape import (
+    BitcastOp,
+    BitcastVregOp,
+    BroadcastInSublanesOp,
+    ConcatenateOp,
+    DynamicGatherOp,
+    DynamicRotateOp,
+    GatherOp,
+    IotaOp,
+    MaskCastOp,
+    RepeatOp,
+    ReshapeOp,
+    RollVectorsOp,
+    RotateOp,
+    ScanCountOp,
+    UnrollVectorsOp,
+)
 from xdsl.ir import (
+    Attribute,
+    Block,
     Dialect,
     EnumAttribute,
     Operation,
     ParametrizedAttribute,
+    Region,
     SpacedOpaqueSyntaxAttribute,
-    TypeAttribute
+    SSAValue,
+    TypeAttribute,
 )
-
-from xdsl.ir.core import Attribute, Block, Region, SSAValue
 from xdsl.irdl import (
+    AnyOf,
+    IRDLOperation,
+    attr_def,
     irdl_attr_definition,
-    irdl_op_definition
+    irdl_op_definition,
+    operand_def,
+    param_def,
+    region_def,
+    traits_def,
+    var_operand_def,
+    var_result_def,
 )
-
-from xdsl.irdl.attributes import param_def
-from xdsl.irdl.constraints import AnyOf
-from xdsl.irdl.operations import IRDLOperation, attr_def, operand_def, region_def, traits_def, var_operand_def, var_result_def
-from xdsl.parser.attribute_parser import AttrParser
+from xdsl.parser import AttrParser
 from xdsl.printer import Printer
-
-from xdsl.traits import IsTerminator, Pure, RecursiveMemoryEffect, ReturnLike, SingleBlockImplicitTerminator
+from xdsl.traits import (
+    IsTerminator,
+    Pure,
+    RecursiveMemoryEffect,
+    ReturnLike,
+    SingleBlockImplicitTerminator,
+)
 from xdsl.utils.exceptions import VerifyException
 from xdsl.utils.hints import isa
-from xdsl.utils.str_enum import (
-    StrEnum
-)
+from xdsl.utils.str_enum import StrEnum
 
 I64ArrayAttr = ArrayAttr[IntegerAttr[I64]]
+
 
 def _parse_i64_array(parser: AttrParser) -> I64ArrayAttr:
     parser.parse_punctuation("[")
@@ -63,22 +130,24 @@ def _parse_i64_array(parser: AttrParser) -> I64ArrayAttr:
         parser.parse_punctuation("]")
     return ArrayAttr(values)
 
+
 def _print_i64_array(printer: Printer, arr: I64ArrayAttr) -> None:
     printer.print_string("[")
     printer.print_list(arr.data, lambda x: printer.print_string(f"{x.value.data}"))
     printer.print_string("]")
+
 
 @irdl_attr_definition
 class DotDimensionNumbersAttr(ParametrizedAttribute):
     name = "tpu.dot_dimension_numbers"
 
     lhs_contracting_dims: I64ArrayAttr = param_def()
-    rhs_contracting_dims: I64ArrayAttr = param_def() 
+    rhs_contracting_dims: I64ArrayAttr = param_def()
     lhs_non_contracting_dims: I64ArrayAttr = param_def()
     rhs_non_contracting_dims: I64ArrayAttr | NoneAttr = param_def()
     output_dim_order: I64ArrayAttr = param_def()
     lhs_batch_dims: I64ArrayAttr | NoneAttr = param_def()
-    rhs_batch_dims: I64ArrayAttr | NoneAttr = param_def() 
+    rhs_batch_dims: I64ArrayAttr | NoneAttr = param_def()
 
     @classmethod
     def parse_parameters(cls, parser: AttrParser) -> Sequence[Attribute]:
@@ -103,9 +172,9 @@ class DotDimensionNumbersAttr(ParametrizedAttribute):
             rhs_non_contracting_dims,
             output_dim_order,
             lhs_batch_dims,
-            rhs_batch_dims
+            rhs_batch_dims,
         ]
-    
+
     def print_parameters(self, printer: Printer) -> None:
         with printer.in_angle_brackets():
             _print_i64_array(printer, self.lhs_contracting_dims)
@@ -121,7 +190,8 @@ class DotDimensionNumbersAttr(ParametrizedAttribute):
             _print_i64_array(printer, self.lhs_batch_dims)
             printer.print_string(",")
             _print_i64_array(printer, self.rhs_batch_dims)
-    
+
+
 @irdl_attr_definition
 class Float8EXMYType(ParametrizedAttribute, TypeAttribute):
     name = "tpu.float8_exmy"
@@ -133,35 +203,39 @@ class Float8EXMYType(ParametrizedAttribute, TypeAttribute):
             pos = parser.pos
             ty = parser.parse_type()
             if not isa(ty, AnyFloat):
-                parser.raise_error(f"tpu.float8_exmy underlying type must be a float type (got {ty})", pos, parser.pos - 1,
+                parser.raise_error(
+                    f"tpu.float8_exmy underlying type must be a float type (got {ty})",
+                    pos,
+                    parser.pos - 1,
                 )
             return [ty]
-        
+
     def print_parameters(self, printer: Printer) -> None:
         with printer.in_angle_brackets():
             printer.print_attribute(self.underlying_type)
 
-#----------------------------------------------------------
-#                   enums + attr wrappers
-#----------------------------------------------------------
 
 class PipelineMode(StrEnum):
     Synchronous = auto()
     Double_Buffered = auto()
+
 
 @irdl_attr_definition
 class PipelineModeAttr(EnumAttribute[PipelineMode], SpacedOpaqueSyntaxAttribute):
     name = "tpu.pipeline_mode"
     enum_type = PipelineMode
 
+
 class RevisitMode(StrEnum):
     Immediate = auto()
     Any = auto()
+
 
 @irdl_attr_definition
 class RevisitModeAttr(EnumAttribute[RevisitMode], SpacedOpaqueSyntaxAttribute):
     name = "tpu.revisit_mode"
     enum_type = RevisitMode
+
 
 class DimensionSemantics(StrEnum):
     Parallel = auto()
@@ -169,42 +243,45 @@ class DimensionSemantics(StrEnum):
     Core_Parallel = auto()
     Subcore_Parallel = auto()
 
+
 @irdl_attr_definition
-class DimensionSemanticsAttr(EnumAttribute[DimensionSemantics], SpacedOpaqueSyntaxAttribute):
+class DimensionSemanticsAttr(
+    EnumAttribute[DimensionSemantics], SpacedOpaqueSyntaxAttribute
+):
     name = "tpu.dimension_semantics"
     enum_type = DimensionSemantics
+
 
 class ContractPrecision(StrEnum):
     Bf16 = auto()
     Fp32 = auto()
 
+
 @irdl_attr_definition
-class ContractPrecisionAttr(EnumAttribute[ContractPrecision], SpacedOpaqueSyntaxAttribute):
+class ContractPrecisionAttr(
+    EnumAttribute[ContractPrecision], SpacedOpaqueSyntaxAttribute
+):
     name = "tpu.contract_precision"
     enum_type = ContractPrecision
+
 
 class PackFormat(StrEnum):
     Compressed = auto()
     Interleaved = auto()
+
 
 @irdl_attr_definition
 class PackFormatAttr(EnumAttribute[PackFormat], SpacedOpaqueSyntaxAttribute):
     name = "tpu.pack_format"
     enum_type = PackFormat
 
-#----------------------------------------------------------
-#                       structural ops
-#----------------------------------------------------------
+
 @irdl_op_definition
 class YieldOp(IRDLOperation):
     name = "tpu.yield"
     arguments = var_operand_def()
 
-    traits = traits_def(
-        Pure(),
-        ReturnLike(),
-        IsTerminator()
-    )
+    traits = traits_def(Pure(), ReturnLike(), IsTerminator())
 
     assembly_format = "attr-dict ($arguments^ `:` type($arguments))?"
 
@@ -214,35 +291,31 @@ class YieldOp(IRDLOperation):
     ):
         super().__init__(operands=[yielded])
 
-    
+
 @irdl_op_definition
 class RegionOp(IRDLOperation):
     name = "tpu.region"
     results_ = var_result_def()
     region = region_def("single_block")
-    
-    traits = traits_def(
-        RecursiveMemoryEffect(),
-        SingleBlockImplicitTerminator(YieldOp)
-    )
+
+    traits = traits_def(RecursiveMemoryEffect(), SingleBlockImplicitTerminator(YieldOp))
 
     def __init__(
-        self, 
+        self,
         result_types: Sequence[Attribute],
-        region: Region | Sequence[Block] | Sequence[Operation]
+        region: Region | Sequence[Block] | Sequence[Operation],
     ):
-        super().__init__(
-            operands=[],
-            result_types=[result_types],
-            regions=[region]
-        )
+        super().__init__(operands=[], result_types=[result_types], regions=[region])
 
     def verify_(self) -> None:
         for r in self.results_.types:
-            if(not isinstance(r, (IntegerType, VectorType, IndexType)) and not isa(r, AnyFloat)):
+            if not isinstance(r, (IntegerType, VectorType, IndexType)) and not isa(
+                r, AnyFloat
+            ):
                 raise VerifyException(
                     f"tpu.region result must be a float, int, index or a vector type (got {r})"
                 )
+
 
 @irdl_op_definition
 class TraceOp(IRDLOperation):
@@ -252,17 +325,14 @@ class TraceOp(IRDLOperation):
     results_ = var_result_def()
     region = region_def("single_block")
 
-    traits = traits_def(
-        RecursiveMemoryEffect(),
-        SingleBlockImplicitTerminator(YieldOp)
-    )
+    traits = traits_def(RecursiveMemoryEffect(), SingleBlockImplicitTerminator(YieldOp))
 
     def __init__(
         self,
         message: str | StringAttr,
         level: int | IntegerAttr[IntegerType],
         result_types: Sequence[Attribute],
-        region: Region | Sequence[Block] | Sequence[Operation]
+        region: Region | Sequence[Block] | Sequence[Operation],
     ):
         if isinstance(message, str):
             message = StringAttr(message)
@@ -272,8 +342,9 @@ class TraceOp(IRDLOperation):
             operands=[],
             result_types=[result_types],
             regions=[region],
-            attributes={"message": message, "level": level}
+            attributes={"message": message, "level": level},
         )
+
 
 @irdl_op_definition
 class TraceStartOp(IRDLOperation):
@@ -282,9 +353,7 @@ class TraceStartOp(IRDLOperation):
     level = attr_def(IntegerAttr[I32])
 
     def __init__(
-        self,
-        message: str | StringAttr,
-        level: int | IntegerAttr[IntegerType]
+        self, message: str | StringAttr, level: int | IntegerAttr[IntegerType]
     ):
         if isinstance(message, str):
             message = StringAttr(message)
@@ -292,13 +361,15 @@ class TraceStartOp(IRDLOperation):
             level = IntegerAttr(level, i32)
         super().__init__(attributes={"message": message, "level": level})
 
+
 @irdl_op_definition
 class TraceStopOp(IRDLOperation):
     name = "tpu.trace_stop"
 
     def __init__(self):
         super().__init__()
-    
+
+
 @irdl_op_definition
 class TraceValueOp(IRDLOperation):
     name = "tpu.trace_value"
@@ -307,14 +378,11 @@ class TraceValueOp(IRDLOperation):
 
     assembly_format = "$value `,` $label attr-dict `:` type($value)"
 
-    def __init__(
-        self,
-        value: SSAValue | Operation,
-        label: str | StringAttr
-    ):
+    def __init__(self, value: SSAValue | Operation, label: str | StringAttr):
         if isinstance(label, str):
             label = StringAttr(label)
-        super().__init__(operands=[value], attributes={"label":label})
+        super().__init__(operands=[value], attributes={"label": label})
+
 
 @irdl_op_definition
 class DelayOp(IRDLOperation):
@@ -322,11 +390,9 @@ class DelayOp(IRDLOperation):
     nanos = operand_def(i32)
     assembly_format = "$nanos attr-dict"
 
-    def __init__(
-        self,
-        nanos: SSAValue | Operation
-    ):
+    def __init__(self, nanos: SSAValue | Operation):
         super().__init__(operands=[nanos])
+
 
 TPU = Dialect(
     "tpu",
@@ -384,7 +450,6 @@ TPU = Dialect(
         CreateMaskOp,
         CreateSubelementMaskOp,
         SublaneShuffleOp,
-
     ],
     [
         CoreTypeAttr,
@@ -398,9 +463,10 @@ TPU = Dialect(
         RoundingModeAttr,
         SemaphoreType,
         DMASemaphoreType,
-        MemorySpaceAttr
+        MemorySpaceAttr,
+        TiledLayoutAttr,
     ],
     [
         # interface
-    ]
+    ],
 )

@@ -328,6 +328,11 @@ def get_all_dialects() -> dict[str, Callable[[], Dialect]]:
 
         return TOSA
 
+    def get_tpu():
+        from xdsl.dialects.tpu import TPU
+
+        return TPU
+
     def get_varith():
         from xdsl.dialects.varith import Varith
 
@@ -428,6 +433,7 @@ def get_all_dialects() -> dict[str, Callable[[], Dialect]]:
         "tensor": get_tensor,
         "test": get_test,
         "tosa": get_tosa,
+        "tpu": get_tpu,
         "varith": get_varith,
         "vector": get_vector,
         "wasm": get_wasm,
