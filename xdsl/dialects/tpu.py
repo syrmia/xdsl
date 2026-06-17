@@ -1,21 +1,21 @@
 from collections.abc import Sequence
 from enum import auto
 
+from xdsl.dialect_interfaces.constant_materialization import (
+    ConstantMaterializationInterface,
+)
+from xdsl.dialects import arith
 from xdsl.dialects.builtin import (
     I32,
-    I64,
     AnyFloat,
     AnyFloatConstr,
-    ArrayAttr,
     IndexType,
     IntegerAttr,
     IntegerType,
-    NoneAttr,
     StringAttr,
     VectorType,
     f32,
     i32,
-    i64,
 )
 from xdsl.dialects.tpu_conversions import (
     ExtFOp,
@@ -39,6 +39,14 @@ from xdsl.dialects.tpu_dma_sem import (
     SemaphoreWaitOp,
     WaitDMA2Op,
 )
+from xdsl.dialects.tpu_matmul import (
+    ContractPrecisionAttr,
+    DotDimensionNumbersAttr,
+    MatmulAccLhsOp,
+    MatmulOp,
+    MatmulPopOp,
+    MatmulPushRhsOp,
+)
 from xdsl.dialects.tpu_memory import (
     LoadOp,
     ShuffledLoadOp,
@@ -54,6 +62,7 @@ from xdsl.dialects.tpu_memory import (
 from xdsl.dialects.tpu_memref import (
     CoreTypeAttr,
     DMASemaphoreType,
+    EraseLayoutOp,
     MemorySpaceAttr,
     MemRefBitcastOp,
     MemRefReshapeOp,
@@ -128,80 +137,6 @@ from xdsl.utils.exceptions import VerifyException
 from xdsl.utils.hints import isa
 from xdsl.utils.str_enum import StrEnum
 
-I64ArrayAttr = ArrayAttr[IntegerAttr[I64]]
-
-
-def _parse_i64_array(parser: AttrParser) -> I64ArrayAttr:
-    parser.parse_punctuation("[")
-    values: list[IntegerAttr[I64]] = []
-    if parser.parse_optional_punctuation("]") is None:
-        values.append(IntegerAttr(parser.parse_integer(), i64))
-        while parser.parse_optional_punctuation(",") is not None:
-            values.append(IntegerAttr(parser.parse_integer(), i64))
-        parser.parse_punctuation("]")
-    return ArrayAttr(values)
-
-
-def _print_i64_array(printer: Printer, arr: I64ArrayAttr) -> None:
-    printer.print_string("[")
-    printer.print_list(arr.data, lambda x: printer.print_string(f"{x.value.data}"))
-    printer.print_string("]")
-
-
-@irdl_attr_definition
-class DotDimensionNumbersAttr(ParametrizedAttribute):
-    name = "tpu.dot_dimension_numbers"
-
-    lhs_contracting_dims: I64ArrayAttr = param_def()
-    rhs_contracting_dims: I64ArrayAttr = param_def()
-    lhs_non_contracting_dims: I64ArrayAttr = param_def()
-    rhs_non_contracting_dims: I64ArrayAttr | NoneAttr = param_def()
-    output_dim_order: I64ArrayAttr = param_def()
-    lhs_batch_dims: I64ArrayAttr | NoneAttr = param_def()
-    rhs_batch_dims: I64ArrayAttr | NoneAttr = param_def()
-
-    @classmethod
-    def parse_parameters(cls, parser: AttrParser) -> Sequence[Attribute]:
-        with parser.in_angle_brackets():
-            lhs_contracting = _parse_i64_array(parser)
-            parser.parse_punctuation(",")
-            rhs_contracting = _parse_i64_array(parser)
-            parser.parse_punctuation(",")
-            lhs_non_contracting_dims = _parse_i64_array(parser)
-            parser.parse_punctuation(",")
-            rhs_non_contracting_dims = _parse_i64_array(parser)
-            parser.parse_punctuation(",")
-            output_dim_order = _parse_i64_array(parser)
-            parser.parse_punctuation(",")
-            lhs_batch_dims = _parse_i64_array(parser)
-            parser.parse_punctuation(",")
-            rhs_batch_dims = _parse_i64_array(parser)
-        return [
-            lhs_contracting,
-            rhs_contracting,
-            lhs_non_contracting_dims,
-            rhs_non_contracting_dims,
-            output_dim_order,
-            lhs_batch_dims,
-            rhs_batch_dims,
-        ]
-
-    def print_parameters(self, printer: Printer) -> None:
-        with printer.in_angle_brackets():
-            _print_i64_array(printer, self.lhs_contracting_dims)
-            printer.print_string(",")
-            _print_i64_array(printer, self.rhs_contracting_dims)
-            printer.print_string(",")
-            _print_i64_array(printer, self.lhs_non_contracting_dims)
-            printer.print_string(",")
-            _print_i64_array(printer, self.rhs_non_contracting_dims)
-            printer.print_string(",")
-            _print_i64_array(printer, self.output_dim_order)
-            printer.print_string(",")
-            _print_i64_array(printer, self.lhs_batch_dims)
-            printer.print_string(",")
-            _print_i64_array(printer, self.rhs_batch_dims)
-
 
 @irdl_attr_definition
 class Float8EXMYType(ParametrizedAttribute, TypeAttribute):
@@ -262,18 +197,14 @@ class DimensionSemanticsAttr(
     name = "tpu.dimension_semantics"
     enum_type = DimensionSemantics
 
+    @classmethod
+    def parse_parameter(cls, parser: AttrParser) -> DimensionSemantics:
+        with parser.in_angle_brackets():
+            return super().parse_parameter(parser)
 
-class ContractPrecision(StrEnum):
-    Bf16 = auto()
-    Fp32 = auto()
-
-
-@irdl_attr_definition
-class ContractPrecisionAttr(
-    EnumAttribute[ContractPrecision], SpacedOpaqueSyntaxAttribute
-):
-    name = "tpu.contract_precision"
-    enum_type = ContractPrecision
+    def print_parameter(self, printer: Printer) -> None:
+        with printer.in_angle_brackets():
+            super().print_parameter(printer)
 
 
 class PackFormat(StrEnum):
@@ -285,6 +216,11 @@ class PackFormat(StrEnum):
 class PackFormatAttr(EnumAttribute[PackFormat], SpacedOpaqueSyntaxAttribute):
     name = "tpu.pack_format"
     enum_type = PackFormat
+
+
+class TpuConstantMaterializationInterface(ConstantMaterializationInterface):
+    def materialize_constant(self, value, type):
+        return arith.ConstantOp.build(properties={"value": value}, result_types=(type,))
 
 
 @irdl_op_definition
@@ -470,21 +406,26 @@ TPU = Dialect(
         EnqueueDMAOp,
         WaitDMA2Op,
         DeviceIdOp,
+        MatmulOp,
+        MatmulPushRhsOp,
+        MatmulAccLhsOp,
+        MatmulPopOp,
+        EraseLayoutOp,
     ],
     [
         CoreTypeAttr,
-        DotDimensionNumbersAttr,
         Float8EXMYType,
         PipelineModeAttr,
         RevisitModeAttr,
         DimensionSemanticsAttr,
-        ContractPrecisionAttr,
         PackFormatAttr,
         RoundingModeAttr,
         SemaphoreType,
         DMASemaphoreType,
         MemorySpaceAttr,
         TiledLayoutAttr,
+        ContractPrecisionAttr,
+        DotDimensionNumbersAttr,
     ],
     [
         # interface

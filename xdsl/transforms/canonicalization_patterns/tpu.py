@@ -1,5 +1,9 @@
+from xdsl.dialects.arith import AddfOp, AddiOp, ConstantOp
 from xdsl.dialects.builtin import (
     DYNAMIC_INDEX,
+    DenseIntOrFPElementsAttr,
+    FloatAttr,
+    IntegerAttr,
     IntegerType,
     MemRefType,
     Signedness,
@@ -8,6 +12,7 @@ from xdsl.dialects.builtin import (
 from xdsl.dialects.math import RoundEvenOp
 from xdsl.dialects.memref import CastOp
 from xdsl.dialects.tpu_conversions import FPToSIOp, RoundingMode
+from xdsl.dialects.tpu_matmul import MatmulOp
 from xdsl.dialects.tpu_memory import LoadOp, ShuffledLoadOp, ShuffledStoreOp, StoreOp
 from xdsl.dialects.tpu_memref import (
     EraseLayoutOp,
@@ -359,3 +364,70 @@ class DynamicGatherToBroadcast(RewritePattern):
                 return
         new_op = BroadcastOp(op.source, op.output.type)
         rewriter.replace_matched_op(new_op)
+
+
+def _is_zero_constant(value: SSAValue) -> bool:
+    producer = value.owner
+    if not isinstance(producer, ConstantOp):
+        return False
+    attr = producer.value
+    if isinstance(attr, FloatAttr):
+        is_zero = attr.value.data == 0.0
+        return is_zero
+    if isinstance(attr, IntegerAttr):
+        is_zero = attr.value.data == 0
+        return is_zero
+    if isinstance(attr, DenseIntOrFPElementsAttr):
+        try:
+            values = list(attr.iter_values())
+        except (AttributeError, TypeError):
+            return False
+        all_zero = len(values) > 0 and all(v == 0 or v == 0.0 for v in values)
+        return all_zero
+    return False
+
+
+def _try_fuse_matmul_into_add(
+    add_op: AddfOp | AddiOp, maybe_matmul: SSAValue, maybe_acc: SSAValue
+) -> MatmulOp | None:
+    matmul = maybe_matmul.owner
+    if not isinstance(matmul, MatmulOp):
+        return None
+    use_count = sum(1 for _ in matmul.result.uses)
+    if use_count != 1:
+        return None
+    if not _is_zero_constant(matmul.acc):
+        return None
+
+    transpose_lhs = matmul.transpose_lhs
+    transpose_rhs = matmul.transpose_rhs
+    precision = matmul.precision
+    dimension_numbers = matmul.dimension_numbers
+    new_matmul = MatmulOp(
+        matmul.lhs,
+        matmul.rhs,
+        maybe_acc,
+        add_op.result.type,
+        transpose_lhs=transpose_lhs if transpose_lhs is not None else False,
+        transpose_rhs=transpose_rhs if transpose_rhs is not None else False,
+        precision=precision,
+        dimension_numbers=dimension_numbers,
+    )
+
+    return new_matmul
+
+
+class CanonicalizeAddFOfMatmul(RewritePattern):
+    @op_type_rewrite_pattern
+    def match_and_rewrite(self, op: AddfOp, rewriter: PatternRewriter) -> None:
+        new_op = _try_fuse_matmul_into_add(op, op.lhs, op.rhs)
+        if new_op is not None:
+            rewriter.replace_matched_op(new_op)
+
+
+class CanonicalizeAddIOfMatmul(RewritePattern):
+    @op_type_rewrite_pattern
+    def match_and_rewrite(self, op: AddiOp, rewriter: PatternRewriter) -> None:
+        new_op = _try_fuse_matmul_into_add(op, op.lhs, op.rhs)
+        if new_op is not None:
+            rewriter.replace_matched_op(new_op)

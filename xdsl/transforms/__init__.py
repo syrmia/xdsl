@@ -597,6 +597,16 @@ def get_all_passes() -> dict[str, Callable[[], type[ModulePass]]]:
 
         return test_vectorize_matmul.TestVectorizeMatmulPass
 
+    def get_tpu_bitwidth_convert():
+        from xdsl.transforms import tpu_bitwidth_convert
+
+        return tpu_bitwidth_convert.TpuBitwidthConvertPass
+
+    def get_tpu_canonicalize():
+        from xdsl.transforms import tpu_canonicalize
+
+        return tpu_canonicalize.TpuCanonicalizePass
+
     def get_transform_interpreter():
         from xdsl.transforms import transform_interpreter
 
@@ -758,6 +768,8 @@ def get_all_passes() -> dict[str, Callable[[], type[ModulePass]]]:
         "test-transform-dialect-erase-schedule": get_test_transform_dialect_erase_schedule,
         "test-vectorize-matmul": get_test_vectorize_matmul,
         "transform-interpreter": get_transform_interpreter,
+        "tpu-bitwidth-convert": get_tpu_bitwidth_convert,
+        "tpu-canonicalize": get_tpu_canonicalize,
         "varith-fuse-repeated-operands": get_varith_fuse_repeated_operands,
         "vector-split-load-extract": get_vector_split_load_extract,
         "x86-allocate-registers": get_x86_allocate_registers,

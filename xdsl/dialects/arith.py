@@ -10,6 +10,7 @@ from xdsl.dialect_interfaces.constant_materialization import (
 from xdsl.dialects.builtin import (
     AnyFloat,
     AnyFloatConstr,
+    BFloat16Type,
     ContainerOf,
     DenseIntOrFPElementsAttr,
     DenseResourceAttr,
@@ -69,7 +70,9 @@ from xdsl.utils.type import get_element_type_or_self, have_compatible_shape
 
 boolLike = ContainerOf(IntegerType(1))
 signlessIntegerLike = ContainerOf(AnyOf([IntegerType, IndexType]))
-floatingPointLike = ContainerOf(AnyOf([Float16Type, Float32Type, Float64Type]))
+floatingPointLike = ContainerOf(
+    AnyOf([BFloat16Type, Float16Type, Float32Type, Float64Type])
+)
 
 
 CMPI_COMPARISON_OPERATIONS = [
@@ -1313,8 +1316,9 @@ class UIToFPOp(IntegerToFloatingPointBaseOp):
 class ExtFOp(IRDLOperation):
     name = "arith.extf"
 
-    input = operand_def(AnyFloatConstr)
-    result = result_def(AnyFloatConstr)
+    input = operand_def(ContainerOf(AnyFloatConstr))
+    result = result_def(ContainerOf(AnyFloatConstr))
+    # AnyFloatConstr
 
     def __init__(self, op: SSAValue | Operation, target_type: AnyFloat):
         super().__init__(operands=[op], result_types=[target_type])
@@ -1328,8 +1332,8 @@ class ExtFOp(IRDLOperation):
 class TruncFOp(IRDLOperation):
     name = "arith.truncf"
 
-    input = operand_def(AnyFloatConstr)
-    result = result_def(AnyFloatConstr)
+    input = operand_def(ContainerOf(AnyFloatConstr))
+    result = result_def(ContainerOf(AnyFloatConstr))
 
     def __init__(self, op: SSAValue | Operation, target_type: AnyFloat):
         super().__init__(operands=[op], result_types=[target_type])
