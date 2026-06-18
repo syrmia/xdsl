@@ -219,7 +219,9 @@ class PackFormatAttr(EnumAttribute[PackFormat], SpacedOpaqueSyntaxAttribute):
 
 
 class TpuConstantMaterializationInterface(ConstantMaterializationInterface):
-    def materialize_constant(self, value, type):
+    def materialize_constant(
+        self, value: Attribute, type: Attribute
+    ) -> Operation | None:
         return arith.ConstantOp.build(properties={"value": value}, result_types=(type,))
 
 
@@ -428,6 +430,6 @@ TPU = Dialect(
         DotDimensionNumbersAttr,
     ],
     [
-        # interface
+        TpuConstantMaterializationInterface(),
     ],
 )

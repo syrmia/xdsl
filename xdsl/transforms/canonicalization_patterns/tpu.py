@@ -74,9 +74,8 @@ class MemRefSliceFoldConstantDynamicDim(RewritePattern):
             const_val = const_evaluate_operand(dynamic_size)
             if const_val is not None:
                 if const_val <= 0:
-                    new_dynamic_sizes.append(dynamic_size)
-                else:
-                    new_shape[dynamic_dim_index] = const_val
+                    return
+                new_shape[dynamic_dim_index] = const_val
             else:
                 new_dynamic_sizes.append(dynamic_size)
             dynamic_dim_index += 1
