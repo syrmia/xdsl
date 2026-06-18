@@ -82,6 +82,12 @@ from xdsl.dialects.tpu_pack import (
     UnpackElementwiseOp,
     UnpackSubelementsOp,
 )
+from xdsl.dialects.tpu_reductions import (
+    AllReduceOp,
+    ReduceIndexOp,
+    ReductionKindAttr,
+    ScanOp,
+)
 from xdsl.dialects.tpu_shape import (
     BitcastOp,
     BitcastVregOp,
@@ -413,6 +419,9 @@ TPU = Dialect(
         MatmulAccLhsOp,
         MatmulPopOp,
         EraseLayoutOp,
+        AllReduceOp,
+        ReduceIndexOp,
+        ScanOp,
     ],
     [
         CoreTypeAttr,
@@ -428,6 +437,7 @@ TPU = Dialect(
         TiledLayoutAttr,
         ContractPrecisionAttr,
         DotDimensionNumbersAttr,
+        ReductionKindAttr,
     ],
     [
         TpuConstantMaterializationInterface(),
