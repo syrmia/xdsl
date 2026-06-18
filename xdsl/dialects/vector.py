@@ -23,6 +23,7 @@ from xdsl.dialects.builtin import (
     IndexType,
     IndexTypeConstr,
     IntAttr,
+    IntegerAttr,
     IntegerType,
     MemRefType,
     SignlessIntegerConstraint,
@@ -1609,6 +1610,169 @@ class BitcastOp(IRDLOperation):
             )
 
 
+@irdl_op_definition
+class ShapeCastOp(IRDLOperation):
+    name = "vector.shape_cast"
+    source = operand_def(VectorType)
+    result = result_def(VectorType)
+
+    traits = traits_def(Pure())
+
+    assembly_format = "$source attr-dict `:` type($source) `to` type($result)"
+
+    def __init__(self, source: SSAValue | Operation, result_type: Attribute):
+        super().__init__(operands=[source], result_types=[result_type])
+
+    def verify_(self) -> None:
+        source_ty = self.source.type
+        result_ty = self.result.type
+        assert isinstance(source_ty, VectorType)
+        assert isinstance(result_ty, VectorType)
+
+        if source_ty.element_type != result_ty.element_type:
+            raise VerifyException(
+                "vector.shape_cast: source and result element types must match"
+            )
+
+        source_num = 1
+        for d in source_ty.get_shape():
+            source_num *= d
+        result_num = 1
+        for d in result_ty.get_shape():
+            result_num *= d
+        if source_num != result_num:
+            raise VerifyException(
+                f"vector.shape_cast: has different number of elements at source ({source_num}) and result ({result_num})"
+            )
+
+
+@irdl_op_definition
+class MultiDimReductionOp(IRDLOperation):
+    name = "vector.multi_reduction"
+
+    _T: ClassVar = VarConstraint("T", AnyAttr())
+
+    kind = prop_def(CombiningKindAttr)
+    source = operand_def(VectorType)
+    acc = operand_def(_T)
+    reduction_dims = prop_def(ArrayAttr)
+    dest = result_def(_T)
+
+    traits = traits_def(Pure())
+
+    def __init__(
+        self,
+        source: SSAValue | Operation,
+        acc: SSAValue | Operation,
+        kind: CombiningKindFlag | CombiningKindAttr,
+        reduction_dims: ArrayAttr | Sequence[int],
+        result_type: Attribute,
+    ):
+        if isinstance(kind, CombiningKindFlag):
+            kind = CombiningKindAttr(kind)
+        if not isinstance(reduction_dims, ArrayAttr):
+            reduction_dims = ArrayAttr([IntegerAttr(v, i64) for v in reduction_dims])
+        super().__init__(
+            operands=[source, acc],
+            result_types=[result_type],
+            properties={"kind": kind, "reduction_dims": reduction_dims},
+        )
+
+    @classmethod
+    def parse(cls, parser: Parser) -> MultiDimReductionOp:
+        parser.parse_punctuation("<")
+        kind_str = parser.parse_identifier()
+        parser.parse_punctuation(">")
+        kind = CombiningKindAttr(CombiningKindFlag(kind_str))
+
+        parser.parse_punctuation(",")
+        source = parser.parse_unresolved_operand()
+        parser.parse_punctuation(",")
+        acc = parser.parse_unresolved_operand()
+
+        parser.parse_punctuation("[")
+        dims: list[IntegerAttr] = []
+        if parser.parse_optional_punctuation("]") is None:
+            dims.append(IntegerAttr(parser.parse_integer(), i64))
+            while parser.parse_optional_punctuation(",") is not None:
+                dims.append(IntegerAttr(parser.parse_integer(), i64))
+            parser.parse_punctuation("]")
+        reduction_dims = ArrayAttr(dims)
+
+        extra_attrs = parser.parse_optional_attr_dict()
+
+        parser.parse_punctuation(":")
+        source_ty = parser.parse_type()
+        parser.parse_keyword("to")
+        dest_ty = parser.parse_type()
+
+        source_val = parser.resolve_operand(source, source_ty)
+        acc_val = parser.resolve_operand(acc, dest_ty)
+
+        op = cls(source_val, acc_val, kind, reduction_dims, dest_ty)
+        if extra_attrs:
+            op.attributes.update(extra_attrs.data)
+        return op
+
+    def print(self, printer: Printer) -> None:
+        printer.print_string(" <")
+        printer.print_string(self.kind.data.value)
+        printer.print_string(">, ")
+        printer.print_operand(self.source)
+        printer.print_string(", ")
+        printer.print_operand(self.acc)
+        printer.print_string(" [")
+        printer.print_list(
+            self.reduction_dims.data,
+            lambda a: printer.print_string(str(a.value.data)),
+        )
+        printer.print_string("] : ")
+        printer.print_attribute(self.source.type)
+        printer.print_string(" to ")
+        printer.print_attribute(self.dest.type)
+
+    def verify_(self) -> None:
+        source_ty = self.source.type
+        dest_ty = self.dest.type
+        assert isinstance(source_ty, VectorType)
+
+        source_elem = source_ty.element_type
+        if isinstance(dest_ty, VectorType):
+            dest_elem = dest_ty.element_type
+        else:
+            dest_elem = dest_ty
+        if source_elem != dest_elem:
+            raise VerifyException(
+                "vector.multi_reduction: source and result must have the same element type"
+            )
+
+        red_dims: list[int] = [a.value.data for a in self.reduction_dims.data]
+        source_rank = len(source_ty.get_shape())
+        seen: set[int] = set()
+        for d in red_dims:
+            if d < 0 or d >= source_rank:
+                raise VerifyException(
+                    f"vector.multi_reduction: reduction dim {d} out of range [0, {source_rank})"
+                )
+            if d in seen:
+                raise VerifyException(
+                    f"vector.multi_reduction: reduction dim {d} appears more than once"
+                )
+            seen.add(d)
+
+        expected_dest_rank = source_rank - len(red_dims)
+        if isinstance(dest_ty, VectorType):
+            if len(dest_ty.get_shape()) != expected_dest_rank:
+                raise VerifyException(
+                    f"vector.multi_reduction: expected dest rank {expected_dest_rank}, got {len(dest_ty.get_shape())}"
+                )
+        else:
+            if expected_dest_rank != 0:
+                raise VerifyException(
+                    f"vector.multi_reduction: dest is a scalar but {expected_dest_rank} non-reduced dims remain"
+                )
+
+
 Vector = Dialect(
     "vector",
     [
@@ -1623,8 +1787,10 @@ Vector = Dialect(
         LoadOp,
         MaskedLoadOp,
         MaskedStoreOp,
+        MultiDimReductionOp,
         PrintOp,
         ReductionOp,
+        ShapeCastOp,
         ShuffleOp,
         StoreOp,
         TransferReadOp,
